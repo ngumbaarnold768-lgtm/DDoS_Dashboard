@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DDoS Detection Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e2f; color: #fff; margin: 0; padding: 20px; }
+        h1 { text-align: center; color: #4caf50; text-shadow: 0 0 10px rgba(76, 175, 80, 0.5); }
+        .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; }
+        .card { background: #2a2a40; border-radius: 10px; padding: 20px; width: 45%; min-width: 300px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); border-top: 4px solid #4caf50; }
+        .card.alert { border-top-color: #f44336; }
+        canvas { max-height: 250px; }
+        .stats-grid { display: flex; justify-content: space-between; margin-top: 15px; font-size: 1.1em; }
+        .stat-value { font-weight: bold; color: #00bcd4; }
+        .alert-text { color: #f44336; display: none; text-align: center; font-weight: bold; margin-top: 10px; animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: 0.5; } }
+    </style>
+</head>
+<body>
+    <h1>🛡️ DDoS Threat Monitor</h1>
+    
+    <div class="container">
+        <!-- CPU Chart -->
+        <div class="card" id="cpuCard">
+            <h3>CPU Usage (%)</h3>
+            <canvas id="cpuChart"></canvas>
+            <div class="stats-grid">
+                <span>Current CPU: <span class="stat-value" id="cpuVal">0</span>%</span>
+            </div>
+            <div class="alert-text" id="cpuAlert">⚠️ HIGH CPU LOAD DETECTED (HTTP FLOOD?)</div>
+        </div>
+
+        <!-- SYN Connections Chart -->
+        <div class="card" id="synCard">
+            <h3>SYN_RECV Connections</h3>
+            <canvas id="synChart"></canvas>
+            <div class="stats-grid">
+                <span>Half-Open Connections: <span class="stat-value" id="synVal">0</span></span>
+            </div>
+            <div class="alert-text" id="synAlert">⚠️ SYN FLOOD DETECTED</div>
+        </div>
+
+        <!-- Network Traffic Chart -->
+        <div class="card" style="width: 100%;">
+            <h3>Network Traffic (MB/s)</h3>
+            <canvas id="netChart" style="max-height: 150px;"></canvas>
+            <div class="stats-grid">
+                <span>Download: <span class="stat-value" id="netRecvVal">0</span> MB/s</span>
+                <span>Upload: <span class="stat-value" id="netSentVal">0</span> MB/s</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Common Chart Options
+        const commonOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 0 },
+            scales: {
+                x: { display: false },
+                y: { beginAtZero: true, grid: { color: '#444' }, ticks: { color: '#aaa' } }
+            },
+            plugins: { legend: { display: false } }
+        };
+
+        // Initialize Charts
+        const cpuCtx = document.getElementById('cpuChart').getContext('2d');
+        const cpuChart = new Chart(cpuCtx, {
+            type: 'line',
+            data: { labels: Array(30).fill(''), datasets: [{ data: Array(30).fill(0), borderColor: '#4caf50', backgroundColor: 'rgba(76, 175, 80, 0.2)', fill: true, tension: 0.3, pointRadius: 0 }] },
+            options: commonOptions
+        });
+
+        const synCtx = document.getElementById('synChart').getContext('2d');
+        const synChart = new Chart(synCtx, {
+            type: 'line',
+            data: { labels: Array(30).fill(''), datasets: [{ data: Array(30).fill(0), borderColor: '#00bcd4', backgroundColor: 'rgba(0, 188, 212, 0.2)', fill: true, tension: 0.3, pointRadius: 0 }] },
+            options: commonOptions
+        });
+
+        const netCtx = document.getElementById('netChart').getContext('2d');
+        const netChart = new Chart(netCtx, {
+            type: 'line',
+            data: { labels: Array(30).fill(''), datasets: [
+                { label: 'Download', data: Array(30).fill(0), borderColor: '#ff9800', tension: 0.3, pointRadius: 0 },
+                { label: 'Upload', data: Array(30).fill(0), borderColor: '#e91e63', tension: 0.3, pointRadius: 0 }
+            ]},
+            options: { ...commonOptions, plugins: { legend: { display: true, labels: { color: '#fff' } } } }
+        });
+
+        // Function to shift data and add new value
+        function addData(chart, label, data) {
+            chart.data.labels.push(label);
+            chart.data.labels.shift();
+            chart.data.datasets.forEach((dataset, index) => {
+                dataset.data.push(data[index] || data[0]); // Handle single or multiple datasets
+            });
+            chart.update();
+        }
+
+        // Fetch data every 1 second
+        setInterval(() => {
+            fetch('/api/stats')
+                .then(response => response.json())
+                .then(data => {
+                    // Update text values
+                    document.getElementById('cpuVal').innerText = data.cpu.toFixed(1);
+                    document.getElementById('synVal').innerText = data.syn_recv;
+                    document.getElementById('netRecvVal').innerText = data.mb_recv;
+                    document.getElementById('netSentVal').innerText = data.mb_sent;
+
+                    // Update charts
+                    addData(cpuChart, '', [data.cpu]);
+                    addData(synChart, '', [data.syn_recv]);
+                    addData(netChart, '', [data.mb_recv, data.mb_sent]);
+
+                    // Trigger Alerts visually
+                    if (data.cpu > 80) {
+                        document.getElementById('cpuCard').classList.add('alert');
+                        document.getElementById('cpuAlert').style.display = 'block';
+                    } else {
+                        document.getElementById('cpuCard').classList.remove('alert');
+                        document.getElementById('cpuAlert').style.display = 'none';
+                    }
+
+                    if (data.syn_recv > 100) {
+                        document.getElementById('synCard').classList.add('alert');
+                        document.getElementById('synAlert').style.display = 'block';
+                    } else {
+                        document.getElementById('synCard').classList.remove('alert');
+                        document.getElementById('synAlert').style.display = 'none';
+                    }
+                });
+        }, 1000); // Update every second
+    </script>
+</body>
+</html>
+(2)
